@@ -5,6 +5,30 @@ Created on Oct 12, 2016
 '''
 import queue
 import threading
+import ast
+
+class RouterMessage:
+    tbl_len = 30
+    name_length = 5
+    
+    def __init__(self, router_name, table):
+        self.table = table
+        self.router_name = router_name
+
+    def to_byte_S(self):
+        # fancy stuff:
+        byte_S = str(self.router_name).zfill(self.name_length)
+        byte_S.append(str(self.table)).zfill(self.tbl_len)
+        return byte_S
+        
+
+    def from_byte_S(self, byte_S):
+        router_name = byte_S[:self.name_length]
+        table = byte_S[self.name_length:]
+        table = ast.literal_eval(table)
+        return self(router_name, table)
+
+    
 
 
 ## wrapper class for a queue of packets
@@ -172,7 +196,8 @@ class Router:
                 if p.prot_S == 'data':
                     self.forward_packet(p,i)
                 elif p.prot_S == 'control':
-                    self.update_routes(p, i)
+                    mssg = RouterMessage.from_byte_S(p.data)
+                    self.update_routes(mssg, i)
                 else:
                     raise Exception('%s: Unknown packet type in packet %s' % (self, p))
             
@@ -192,7 +217,7 @@ class Router:
         
     ## forward the packet according to the routing table
     #  @param p Packet containing routing information
-    def update_routes(self, p, i):
+    def update_routes(self, p: RouterMessage, i):
         #TODO: add logic to update the routing tables and
         # possibly send out routing updates
         print('%s: Received routing update %s from interface %d' % (self, p, i))
@@ -201,7 +226,7 @@ class Router:
     # @param i Interface number on which to send out a routing update
     def send_routes(self, i):
         # a sample route update packet
-        p = NetworkPacket(0, 'control', 'Sample routing table packet')
+        p = NetworkPacket(0, 'control',  RouterMessage(self.name, self.rt_tbl_D).to_byte_S())
         try:
             #TODO: add logic to send out a route update
             print('%s: sending routing update "%s" from interface %d' % (self, p, i))
