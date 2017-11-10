@@ -153,7 +153,7 @@ class Router:
         for cost in intf_cost_L:
             self.intf_L.append(Interface(cost, max_queue_size))
         #set up the routing table for connected hosts
-        self.rt_tbl_D = rt_tbl_D 
+        self.rt_tbl_D = rt_tbl_D
 
     ## called when printing the object
     def __str__(self):
@@ -216,6 +216,45 @@ class Router:
         #TODO: print the routes as a two dimensional table for easy inspection
         # Currently the function just prints the route table as a dictionary
         print(self.rt_tbl_D)
+        print("       Cost to:")
+        print("        ", end='')
+        # print all possible keys for the hosts:
+        for i in range(1,3):
+            print(str(i) + " ", end='')
+        print()
+        for inter in range(len(self.intf_L)):
+
+            if inter == 0:
+                print("From ", end='')
+            else:
+                print("     ", end='')
+            print(str(inter) + "  ", end='')
+            for host in range(1,3):
+                if host in self.rt_tbl_D.keys():
+                    if inter in self.rt_tbl_D[host].keys():
+                        print(str(self.rt_tbl_D[host][inter]) + " ",end='')
+                    else:
+                        print("- ", end='')
+                else:
+                    print("- ", end='')
+            print()
+        print()
+        
+        # print the keys:
+        # for i in self.rt_tbl_D.keys():
+        #     print(i,end='')
+        # print()
+        # for i in self.rt_tbl_D.keys():
+        #     print("    ", end='')
+        #     print(self.rt_tbl_D[i][0], end='')
+        #     for val in self.rt_tbl_D[i].keys():
+        #         print(" " + str(self.rt_tbl_D[i][val]), end='')
+        #     print()
+
+
+                
+        print()
+       
         
                 
     ## thread target for the host to keep forwarding data
