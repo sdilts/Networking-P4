@@ -5,7 +5,8 @@ import threading
 ## wrapper class for a queue of packets
 class Interface:
     ## @param maxsize - the maximum size of the queue storing packets
-    def __init__(self, maxsize=0):
+    def __init__(self, name, maxsize=0):
+        self.name = name
         self.in_queue = queue.Queue(maxsize)
         self.out_queue = queue.Queue(maxsize)
     
@@ -93,9 +94,9 @@ class Host:
     ##@param addr: address of this node represented as an integer
     def __init__(self, addr):
         self.addr = addr
-        self.intf_L = [Interface()]
+        self.intf_L = [Interface("network")]
         self.stop = False #for thread termination
-    
+
     ## called when printing the object
     def __str__(self):
         return self.addr
@@ -126,6 +127,7 @@ class Host:
                 return
         
 
+all_destinations = ['H1', 'H2', 'RA', 'RB']
 
 ## Implements a multi-interface router
 class Router:
@@ -137,11 +139,22 @@ class Router:
         self.stop = False #for thread termination
         self.name = name
         #create a list of interfaces
-        self.intf_L = [Interface(max_queue_size) for _ in range(len(cost_D))]
+        # self.intf_L = [Interface(max_queue_size) for _ in range(len(cost_D))]
+        self.neb_routers = [self.name]
+        self.intf_L = dict()
+        self.rt_tbl_D = {}      # {destination: {router: cost}}
+        for dest, interfaces in cost_D.items():
+            assert(len(interfaces.keys()) == 1)
+            for port, cost in interfaces.items():
+                self.intf_L[port] = Interface(name, max_queue_size)
+                self.rt_tbl_D.update({dest:{self.name:cost}})
+            if 'R' in dest:
+                self.neb_routers.append(dest)
+        print("neb_routers ", self.neb_routers)
+        print("interfaces: ", self.intf_L)
         #save neighbors and interfeces on which we connect to them
         self.cost_D = cost_D    # {neighbor: {interface: cost}}
         #TODO: set up the routing table for connected hosts
-        self.rt_tbl_D = {}      # {destination: {router: cost}}
         print('%s: Initialized routing table' % self)
         self.print_routes()
 
@@ -151,10 +164,10 @@ class Router:
         return self.name
 
 
-    ## look through the content of incoming interfaces and 
+    ## look through the content of incoming interfaces and
     # process data and control packets
     def process_queues(self):
-        for i in range(len(self.intf_L)):
+        for i, interface in self.intf_L.items():
             pkt_S = None
             #get packet from interface i
             pkt_S = self.intf_L[i].get('in')
@@ -207,10 +220,36 @@ class Router:
         print('%s: Received routing update %s from interface %d' % (self, p, i))
 
         
+
     ## Print routing table
+    print_lock = threading.Lock()
     def print_routes(self):
-        #TODO: print the routes as a two dimensional table
+        self.print_lock.acquire()
+        print('%s: routing table' % self)
         print(self.rt_tbl_D)
+        print("       Cost to:")
+        print("    ",self.name," ", end='')
+        for dest in all_destinations:
+            print(dest," ",end='')
+        print()
+        for index, router in enumerate(self.neb_routers):
+            if index == 0:
+                print("From ", end='')
+            else:
+                print("     ", end='')
+            print(router + "  ", end='')
+            for dest in all_destinations:
+                if dest in self.rt_tbl_D.keys():
+                    if router in self.rt_tbl_D[dest].keys():
+                        print(str(self.rt_tbl_D[dest][router]) + "   ",end='')
+                    else:
+                        print("-   ", end='')
+                else:
+                    print("-   ", end='')
+            print()
+        print()
+        self.print_lock.release()
+
 
                 
     ## thread target for the host to keep forwarding data
