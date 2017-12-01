@@ -1,8 +1,31 @@
 import queue
 import threading
+import operator
+import ast
+from collections import namedtuple
 
+class RouterMessage:
+    tbl_len = 30
+    name_length = 5
 
-## wrapper class for a queue of packets
+    def __init__(self, router_name, table):
+        self.table = table
+        self.router_name = router_name
+
+    def to_byte_S(self):
+        # fancy stuff:
+        byte_S = str(self.router_name).zfill(self.name_length)
+        byte_S += str(self.table).zfill(self.tbl_len)
+        return byte_S
+
+    @classmethod
+    def from_byte_S(self, byte_S):
+        router_name = byte_S[:self.name_length]
+        table = byte_S[self.name_length:]
+        table = ast.literal_eval(table.strip('0'))
+        return self(router_name, table)
+
+# wrapper class for a queue of packets
 class Interface:
     ## @param maxsize - the maximum size of the queue storing packets
     def __init__(self, name, maxsize=0):
@@ -82,7 +105,7 @@ class NetworkPacket:
             prot_S = 'control'
         else:
             raise('%s: unknown prot_S field: %s' %(self, prot_S))
-        data_S = byte_S[NetworkPacket.dst_S_length + NetworkPacket.prot_S_length : ]        
+        data_S = byte_S[NetworkPacket.dst_S_length + NetworkPacket.prot_S_length : ]
         return self(dst, prot_S, data_S)
     
 
@@ -125,13 +148,13 @@ class Host:
             if(self.stop):
                 print (threading.currentThread().getName() + ': Ending')
                 return
-        
 
 all_destinations = ['H1', 'H2', 'RA', 'RB']
 
 ## Implements a multi-interface router
 class Router:
-    
+
+    Intf_data = namedtuple('Intf_data',['name','port'])
     ##@param name: friendly router name for debugging
     # @param cost_D: cost table to neighbors {neighbor: {interface: cost}}
     # @param max_queue_size: max queue length (passed to Interface)
@@ -140,20 +163,26 @@ class Router:
         self.name = name
         #create a list of interfaces
         # self.intf_L = [Interface(max_queue_size) for _ in range(len(cost_D))]
-        self.neb_routers = [self.name]
+        self.neb_routers = [self.Intf_data(self.name,None)]
         self.intf_L = dict()
+        self.cost_D = cost_D    # {neighbor: {interface: cost}}
+        print("costs: ",cost_D)
         self.rt_tbl_D = {}      # {destination: {router: cost}}
         for dest, interfaces in cost_D.items():
             assert(len(interfaces.keys()) == 1)
             for port, cost in interfaces.items():
-                self.intf_L[port] = Interface(name, max_queue_size)
+                self.intf_L[port] = Interface(dest, max_queue_size)
                 self.rt_tbl_D.update({dest:{self.name:cost}})
             if 'R' in dest:
-                self.neb_routers.append(dest)
+                self.neb_routers.append(self.Intf_data(dest, port))
+        # cost to self is always zero:
+        self.rt_tbl_D.update({self.name:{self.name:0}})
+        self.neb_routers.sort(key=operator.itemgetter(0))
         print("neb_routers ", self.neb_routers)
-        print("interfaces: ", self.intf_L)
+        print(self.name, "interfaces: ")
+        for port, intf in self.intf_L.items():
+            print("port: ", port, "name ", intf.name)
         #save neighbors and interfeces on which we connect to them
-        self.cost_D = cost_D    # {neighbor: {interface: cost}}
         #TODO: set up the routing table for connected hosts
         print('%s: Initialized routing table' % self)
         self.print_routes()
@@ -177,7 +206,8 @@ class Router:
                 if p.prot_S == 'data':
                     self.forward_packet(p,i)
                 elif p.prot_S == 'control':
-                    self.update_routes(p, i)
+                    mssg = RouterMessage.from_byte_S(p.data_S)
+                    self.update_routes(mssg, self.intf_L[i].name)
                 else:
                     raise Exception('%s: Unknown packet type in packet %s' % (self, p))
             
@@ -203,30 +233,58 @@ class Router:
     def send_routes(self, i):
         # TODO: Send out a routing table update
         #create a routing table update packet
-        p = NetworkPacket(0, 'control', 'DUMMY_ROUTING_TABLE')
+        p = NetworkPacket(0, 'control',  RouterMessage(self.name, self.build_update_tbl() ).to_byte_S())
         try:
+            #TODO: add logic to send out a route update
             print('%s: sending routing update "%s" from interface %d' % (self, p, i))
             self.intf_L[i].put(p.to_byte_S(), 'out', True)
         except queue.Full:
             print('%s: packet "%s" lost on interface %d' % (self, p, i))
             pass
 
+    def build_update_tbl(self):
+        tbl = dict()
+        for dest, routers in self.rt_tbl_D.items():
+            tbl[dest] = routers[self.name]
+        return tbl
 
-    ## forward the packet according to the routing table
+
     #  @param p Packet containing routing information
-    def update_routes(self, p, i):
-        #TODO: add logic to update the routing tables and
-        # possibly send out routing updates
-        print('%s: Received routing update %s from interface %d' % (self, p, i))
+    def update_routes(self, p, intf_name):
+        print('%s: Received routing update %s from interface %s' % (self, p, intf_name))
+        print("updates: ",p.table)
+        # update the table for the ports you just recieved:
+        for host, cost in p.table.items():
+            if host in self.rt_tbl_D.keys():
+                self.rt_tbl_D[host][intf_name] = cost
+            else:
+                self.rt_tbl_D[host] = dict()
+                self.rt_tbl_D[host][intf_name] = cost
+        change = False
+        # check to see if anything in your table changes:
+        for dest, cost in p.table.items():
+            new_cost = self.rt_tbl_D[intf_name][self.name] + cost
+            if self.name in self.rt_tbl_D[dest].keys():
+                old_cost = self.rt_tbl_D[dest][self.name]
+            else:
+                old_cost = float("inf")
+            print("dest: ", dest,"new cost: ",new_cost,"old_cost: ", old_cost)
+            if new_cost < old_cost:
+                self.rt_tbl_D[dest][self.name] = new_cost
+                change = True
+        if change:
+            self.print_routes()
+            for neghbor_data in self.neb_routers:
+                if neghbor_data.name != self.name:
+                    self.send_routes(neghbor_data.port)
 
-        
 
     ## Print routing table
     print_lock = threading.Lock()
     def print_routes(self):
         self.print_lock.acquire()
         print('%s: routing table' % self)
-        print(self.rt_tbl_D)
+        #print(self.rt_tbl_D)
         print("       Cost to:")
         print("    ",self.name," ", end='')
         for dest in all_destinations:
@@ -237,11 +295,11 @@ class Router:
                 print("From ", end='')
             else:
                 print("     ", end='')
-            print(router + "  ", end='')
+            print(router.name + "  ", end='')
             for dest in all_destinations:
                 if dest in self.rt_tbl_D.keys():
-                    if router in self.rt_tbl_D[dest].keys():
-                        print(str(self.rt_tbl_D[dest][router]) + "   ",end='')
+                    if router.name in self.rt_tbl_D[dest].keys():
+                        print(str(self.rt_tbl_D[dest][router.name]) + "   ",end='')
                     else:
                         print("-   ", end='')
                 else:
@@ -251,7 +309,7 @@ class Router:
         self.print_lock.release()
 
 
-                
+
     ## thread target for the host to keep forwarding data
     def run(self):
         print (threading.currentThread().getName() + ': Starting')
@@ -259,4 +317,4 @@ class Router:
             self.process_queues()
             if self.stop:
                 print (threading.currentThread().getName() + ': Ending')
-                return 
+                return
